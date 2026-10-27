@@ -1,9 +1,8 @@
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import axios from "axios";
+import FdrDetails, { API_URL, RequestHistory, errorMessage } from "./FdrDetails";
 import "./App.css";
-
-const API_URL = "http://127.0.0.1:8000";
 
 function App() {
   const [fdrs, setFdrs] = useState([]);
@@ -11,6 +10,16 @@ function App() {
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState("college");
+  const [renewals, setRenewals] = useState([]);
+  const [releases, setReleases] = useState([]);
+  const [selectedId, setSelectedId] = useState(null);
+  const [editingId, setEditingId] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [messageIsError, setMessageIsError] = useState(false);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("All");
+  const registration = useRef(null);
+  const details = useRef(null);
 
   const [form, setForm] = useState({
     institution_name: "",
@@ -25,19 +34,23 @@ function App() {
     try {
       setLoading(true);
 
-      const [fdrResponse, alertResponse] = await Promise.all([
+      const [fdrResponse, alertResponse, renewalResponse, releaseResponse] = await Promise.all([
         axios.get(`${API_URL}/fdrs`),
         axios.get(`${API_URL}/fdrs/alerts`),
+        axios.get(`${API_URL}/renewal-requests`),
+        axios.get(`${API_URL}/release-requests`),
       ]);
 
       setFdrs(fdrResponse.data);
       setAlerts(alertResponse.data.alerts || []);
-      setMessage("");
+      setRenewals(renewalResponse.data);
+      setReleases(releaseResponse.data);
+      return true;
     } catch (error) {
       console.error("Error loading FDR data:", error);
-      setMessage(
-        "Could not load FDR data. Make sure the FastAPI backend is running."
-      );
+      setMessage(`Could not load FDR data. ${errorMessage(error)}`);
+      setMessageIsError(true);
+      return false;
     } finally {
       setLoading(false);
     }
@@ -46,6 +59,39 @@ function App() {
   useEffect(() => {
     loadFdrs();
   }, []);
+
+  async function perform(action, successMessage) {
+    setBusy(true);
+    setMessage("");
+    setMessageIsError(false);
+    try {
+      await action();
+      const refreshed = await loadFdrs();
+      if (refreshed) setMessage(successMessage);
+      return true;
+    } catch (error) {
+      setMessage(errorMessage(error));
+      setMessageIsError(true);
+      return false;
+    } finally { setBusy(false); }
+  }
+
+  function selectFdr(id) {
+    setSelectedId(id);
+    requestAnimationFrame(() => details.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  }
+
+  function editFdr(fdr) {
+    setEditingId(fdr.id);
+    setForm({ institution_name: fdr.institution_name, certificate_number: fdr.certificate_number,
+      bank_name: fdr.bank_name, amount: fdr.amount, maturity_date: fdr.maturity_date });
+    registration.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function clearForm() {
+    setEditingId(null);
+    setForm({ institution_name: "", certificate_number: "", bank_name: "", amount: "", maturity_date: "" });
+  }
 
   // Update form fields
   function handleChange(event) {
@@ -60,92 +106,25 @@ function App() {
   // Register a new FDR
   async function handleSubmit(event) {
     event.preventDefault();
-    setMessage("");
-
-    try {
-      await axios.post(`${API_URL}/fdrs`, {
+    const success = await perform(() => axios({
+      method: editingId ? "put" : "post",
+      url: `${API_URL}/fdrs${editingId ? `/${editingId}` : ""}`,
+      data: {
         institution_name: form.institution_name.trim(),
         certificate_number: form.certificate_number.trim(),
         bank_name: form.bank_name.trim(),
         amount: Number(form.amount),
         maturity_date: form.maturity_date,
-      });
-
-      setForm({
-        institution_name: "",
-        certificate_number: "",
-        bank_name: "",
-        amount: "",
-        maturity_date: "",
-      });
-
-      setMessage("FDR registered successfully.");
-      await loadFdrs();
-    } catch (error) {
-      console.error("Error registering FDR:", error);
-
-      const detail = error.response?.data?.detail;
-      setMessage(
-        typeof detail === "string"
-          ? detail
-          : "Could not register FDR. Check the details and try again."
-      );
-    }
+      },
+    }), editingId ? "FDR corrections saved. Submit it when ready." : "FDR registered successfully.");
+    if (success) clearForm();
   }
 
   // Submit an FDR or perform an officer review action
   async function updateStatus(id, action) {
-    setMessage("");
-
-    try {
-      if (action === "submit") {
-        await axios.post(`${API_URL}/fdrs/${id}/submit`);
-      } else {
-        let reviewNote = "";
-
-        if (action === "correction_required") {
-          reviewNote = window.prompt(
-            "Enter the corrections required:",
-            ""
-          );
-
-          if (reviewNote === null) {
-            return;
-          }
-
-          if (!reviewNote.trim()) {
-            setMessage("Please enter the corrections required.");
-            return;
-          }
-        } else if (action === "verified") {
-          reviewNote = window.prompt(
-            "Enter verification remarks (optional):",
-            "Documents verified in demo"
-          );
-
-          if (reviewNote === null) {
-            return;
-          }
-        }
-
-        await axios.post(`${API_URL}/fdrs/${id}/review`, {
-          action,
-          review_note: reviewNote,
-        });
-      }
-
-      setMessage("FDR status updated successfully.");
-      await loadFdrs();
-    } catch (error) {
-      console.error("Error updating FDR:", error);
-
-      const detail = error.response?.data?.detail;
-      setMessage(
-        typeof detail === "string"
-          ? detail
-          : "Could not update FDR status. Check the backend API."
-      );
-    }
+    await perform(() => action === "submit"
+      ? axios.post(`${API_URL}/fdrs/${id}/submit`)
+      : axios.post(`${API_URL}/fdrs/${id}/review`, { action }), "FDR status updated successfully.");
   }
 
   // Render actions based on the selected dashboard and current status
@@ -156,12 +135,13 @@ function App() {
         fdr.status === "Correction Required"
       ) {
         return (
-          <button
+          <div className="action-group"><button disabled={busy || loading} onClick={() => editFdr(fdr)}>Edit</button><button
             className="action-button"
+            disabled={busy || loading}
             onClick={() => updateStatus(fdr.id, "submit")}
           >
             Submit FDR
-          </button>
+          </button></div>
         );
       }
 
@@ -172,6 +152,7 @@ function App() {
       return (
         <button
           className="action-button"
+          disabled={busy || loading}
           onClick={() => updateStatus(fdr.id, "under_review")}
         >
           Start Review
@@ -181,21 +162,7 @@ function App() {
 
     if (fdr.status === "Under Review") {
       return (
-        <div className="action-group">
-          <button
-            className="action-button success-button"
-            onClick={() => updateStatus(fdr.id, "verified")}
-          >
-            Verify
-          </button>
-
-          <button
-            className="action-button danger-button"
-            onClick={() => updateStatus(fdr.id, "correction_required")}
-          >
-            Request Corrections
-          </button>
-        </div>
+        <button onClick={() => selectFdr(fdr.id)}>Review FDR</button>
       );
     }
 
@@ -240,13 +207,16 @@ function App() {
 
   // Officer view only shows records requiring review
   const visibleFdrs =
-    view === "officer"
+    (view === "officer"
       ? fdrs.filter(
           (fdr) =>
             fdr.status === "Submitted" ||
             fdr.status === "Under Review"
         )
-      : fdrs;
+      : fdrs).filter((fdr) => (statusFilter === "All" || fdr.status === statusFilter) &&
+        [fdr.institution_name, fdr.certificate_number, fdr.bank_name].some((value) => value.toLowerCase().includes(search.toLowerCase().trim())));
+      const selectedFdr = fdrs.find((fdr) => fdr.id === selectedId);
+      const pendingRequest = [...renewals, ...releases].some((request) => request.fdr_id === selectedId && request.status === "Pending");
 
   // Display the maturity alert
   function renderMaturityAlert(alert) {
@@ -278,14 +248,14 @@ function App() {
         <button
           className="refresh-button"
           onClick={loadFdrs}
-          disabled={loading}
+          disabled={loading || busy}
         >
           {loading ? "Loading..." : "Refresh Data"}
         </button>
       </header>
 
       {message && (
-        <div className="message-banner" role="status">
+        <div className={`message-banner ${messageIsError ? "error-banner" : "success-banner"}`} role={messageIsError ? "alert" : "status"}>
           {message}
         </div>
       )}
@@ -294,14 +264,16 @@ function App() {
       <nav className="dashboard-tabs">
         <button
           className={view === "college" ? "tab active-tab" : "tab"}
-          onClick={() => setView("college")}
+          aria-pressed={view === "college"}
+          onClick={() => { setView("college"); setStatusFilter("All"); }}
         >
           College Dashboard
         </button>
 
         <button
           className={view === "officer" ? "tab active-tab" : "tab"}
-          onClick={() => setView("officer")}
+          aria-pressed={view === "officer"}
+          onClick={() => { setView("officer"); setStatusFilter("All"); }}
         >
           Officer Dashboard
         </button>
@@ -374,13 +346,13 @@ function App() {
 
       {/* College registration form */}
       {view === "college" && (
-        <section className="panel">
-          <h2>Register New FDR</h2>
+        <section className="panel" ref={registration}>
+          <h2>{editingId ? `Edit FDR #${editingId}` : "Register New FDR"}</h2>
           <p className="panel-description">
             Enter the institution's fixed deposit details.
           </p>
 
-          <form onSubmit={handleSubmit} className="fdr-form">
+          <form onSubmit={handleSubmit} className="fdr-form"><fieldset disabled={busy || loading}>
             <div className="form-grid">
               <div className="form-field">
                 <label htmlFor="institution_name">
@@ -392,6 +364,7 @@ function App() {
                   value={form.institution_name}
                   onChange={handleChange}
                   placeholder="Enter institution name"
+                  minLength={2}
                   required
                 />
               </div>
@@ -406,6 +379,7 @@ function App() {
                   value={form.certificate_number}
                   onChange={handleChange}
                   placeholder="e.g. FDR-2026-001"
+                  minLength={2}
                   required
                 />
               </div>
@@ -418,6 +392,7 @@ function App() {
                   value={form.bank_name}
                   onChange={handleChange}
                   placeholder="Enter bank name"
+                  minLength={2}
                   required
                 />
               </div>
@@ -453,10 +428,12 @@ function App() {
             <button
               type="submit"
               className="primary-button"
-              disabled={loading}
+              disabled={loading || busy}
             >
-              Register FDR
+              {editingId ? "Save Corrections" : "Register FDR"}
             </button>
+            {editingId && <button type="button" className="secondary-button" onClick={clearForm}>Cancel Edit</button>}
+            </fieldset>
           </form>
         </section>
       )}
@@ -482,6 +459,13 @@ function App() {
             {visibleFdrs.length} record
             {visibleFdrs.length === 1 ? "" : "s"}
           </span>
+        </div>
+
+        <div className="filter-bar">
+          <label>Search FDRs<input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Institution, certificate or bank" /></label>
+          <label>FDR status<select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+            {(view === "officer" ? ["All", "Submitted", "Under Review"] : ["All", "Draft", "Submitted", "Under Review", "Correction Required", "Verified", "Rejected", "Released", "Refunded"]).map((status) => <option key={status}>{status}</option>)}
+          </select></label>
         </div>
 
         {loading ? (
@@ -514,7 +498,7 @@ function App() {
               <tbody>
                 {visibleFdrs.map((fdr) => (
                   <tr key={fdr.id}>
-                    <td>{fdr.certificate_number}</td>
+                    <td><button className="link-button" onClick={() => selectFdr(fdr.id)}>{fdr.certificate_number}</button></td>
                     <td>{fdr.institution_name}</td>
                     <td>{fdr.bank_name}</td>
                     <td>
@@ -535,7 +519,7 @@ function App() {
                       </span>
                     </td>
                     <td>{fdr.review_note || "—"}</td>
-                    <td>{renderActions(fdr)}</td>
+                    <td><div className="record-actions">{renderActions(fdr)}<button className="secondary-button" onClick={() => selectFdr(fdr.id)}>Details</button></div></td>
                   </tr>
                 ))}
               </tbody>
@@ -543,6 +527,13 @@ function App() {
           </div>
         )}
       </section>
+
+      <div ref={details}>{selectedFdr && <FdrDetails key={selectedFdr.id} fdr={selectedFdr} view={view}
+        pending={pendingRequest} busy={busy || loading} perform={perform} onClose={() => setSelectedId(null)} />}</div>
+      <RequestHistory title="Renewal / Replacement Requests" type="renewal" requests={renewals} view={view}
+        busy={busy || loading} perform={perform} onSelect={selectFdr} />
+      <RequestHistory title="Release / Refund Requests" type="release" requests={releases} view={view}
+        busy={busy || loading} perform={perform} onSelect={selectFdr} />
 
       <footer className="app-footer">
         <p>
