@@ -1,0 +1,8 @@
+.tools/
+.venv/
+node_modules/
+uploads/
+__pycache__/
+*.pyc
+*.db
+dist/
