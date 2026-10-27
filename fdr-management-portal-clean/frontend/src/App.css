@@ -1,0 +1,302 @@
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  background: #f3f6fb;
+  color: #1f2937;
+}
+
+.container {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 32px 20px;
+}
+
+h1 {
+  color: #173b70;
+}
+
+.panel {
+  background: white;
+  padding: 24px;
+  margin: 24px 0;
+  border-radius: 12px;
+  box-shadow: 0 2px 10px #0000000d;
+}
+
+form {
+  display: grid;
+  gap: 10px;
+  max-width: 500px;
+}
+
+input {
+  width: 100%;
+  padding: 11px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+}
+
+button {
+  margin-top: 12px;
+  padding: 12px;
+  background: #1d4ed8;
+  color: white;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #1e40af;
+}
+
+.table-wrapper {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 12px;
+}
+
+th,
+td {
+  padding: 12px;
+  text-align: left;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+th {
+  background: #eff4ff;
+}
+
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 150px;
+}
+
+.secondary-button {
+  background: #b45309;
+}
+
+.secondary-button:hover {
+  background: #92400e;
+}
+
+.table-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.status-message {
+  padding: 12px 16px;
+  background: #e0f2fe;
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+
+.status {
+  display: inline-block;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: #e5e7eb;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.status-verified {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.status-correction-required {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.status-under-review {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.status-submitted {
+  background: #ede9fe;
+  color: #5b21b6;
+}
+
+table {
+  min-width: 1000px;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.portal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.dashboard-tabs {
+  display: flex;
+  gap: 10px;
+  margin: 24px 0;
+}
+
+.dashboard-tabs button {
+  margin-top: 0;
+}
+
+.active-tab {
+  background: #173b70;
+}
+
+.tab-button {
+  background: #64748b;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 14px;
+  margin: 24px 0;
+}
+
+.stat-card {
+  background: white;
+  padding: 18px;
+  border-radius: 10px;
+  box-shadow: 0 2px 10px #0000000d;
+}
+
+.stat-card span {
+  display: block;
+  color: #64748b;
+  font-size: 14px;
+}
+
+.stat-card strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 28px;
+  color: #173b70;
+}
+
+.demo-notice {
+  color: #64748b;
+  font-size: 13px;
+  margin: 24px 0;
+}
+
+@media (max-width: 600px) {
+  .dashboard-tabs {
+    flex-direction: column;
+  }
+
+  .portal-header {
+    align-items: flex-start;
+  }
+}
+
+.maturity-panel {
+  border-left: 5px solid #d97706;
+}
+
+.panel-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.panel-description {
+  color: #64748b;
+  margin-top: 6px;
+}
+
+.alert-count,
+.record-count {
+  background: #fef3c7;
+  color: #92400e;
+  padding: 7px 12px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.alert-matured,
+.alert-upcoming {
+  display: inline-block;
+  padding: 6px 9px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.alert-matured {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.alert-upcoming {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.empty-state {
+  padding: 24px 12px;
+  text-align: center;
+  color: #64748b;
+}
+
+.empty-state h3 {
+  color: #334155;
+  margin-bottom: 8px;
+}
+
+.action-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.muted-text {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.refresh-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.message-banner {
+  margin: 16px 0;
+  padding: 12px 16px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-radius: 8px;
+}
+
+.app-footer {
+  margin: 28px 0 12px;
+  text-align: center;
+  color: #64748b;
+  font-size: 12px;
+}
