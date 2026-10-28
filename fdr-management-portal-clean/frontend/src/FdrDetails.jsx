@@ -1,7 +1,10 @@
 import React, { useEffect, useState } from "react";
 import axios from "axios";
+import { Check, ClipboardCheck, Clock, Send, User, X } from "lucide-react";
 
-export const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+axios.defaults.withCredentials = true;
+
+export const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 export const currency = (amount) => Number(amount).toLocaleString("en-IN", {
   style: "currency", currency: "INR", maximumFractionDigits: 2,
 });
@@ -21,14 +24,14 @@ export function RequestHistory({ title, type, requests, view, busy, perform, onS
       <h2>{title}</h2>
       <label className="filter-label">Request status
         <select value={filter} onChange={(event) => setFilter(event.target.value)}>
-          {["All", "Pending", "Approved", "Rejected"].map((status) => <option key={status}>{status}</option>)}
+          {["All", "Pending", "Under Review", "Approved", "Rejected"].map((status) => <option key={status}>{status}</option>)}
         </select>
       </label>
     </div>
-    <p className="muted-text">{requests.filter((request) => request.status === "Pending").length} pending</p>
+    <p className="muted-text">{requests.filter((request) => ["Pending", "Under Review"].includes(request.status)).length} pending / under review</p>
     {visible.length === 0 ? <p className="empty-state">No {filter === "All" ? "" : filter.toLowerCase()} requests.</p> :
       <div className="table-wrapper"><table>
-        <thead><tr><th>Request / FDR</th><th>Details</th><th>Notes</th><th>Status</th><th>Officer Decision</th></tr></thead>
+        <thead><tr><th>Request / FDR</th><th>Details</th><th>Notes</th><th>Status & Audit Timeline</th><th>Officer Decision</th></tr></thead>
         <tbody>{visible.map((request) => <RequestRow key={request.id} {...{ request, type, view, busy, perform, onSelect }} />)}</tbody>
       </table></div>}
   </section>;
@@ -40,7 +43,7 @@ function RequestRow({ request, type, view, busy, perform, onSelect }) {
     const success = await perform(async () => {
       if (action === "reject" && !note.trim()) throw new Error("Enter a reason before rejecting the request.");
       await axios.post(`${API_URL}/${type}-requests/${request.id}/review`, { action, review_note: note });
-    }, `${request.kind} request ${action === "approve" ? "approved" : "rejected"}.`);
+    }, `${request.kind} request ${action === "start_review" ? "is under review" : action === "approve" ? "approved" : "rejected"}.`);
     if (success) setNote("");
   }
   return <tr>
@@ -55,15 +58,26 @@ function RequestRow({ request, type, view, busy, perform, onSelect }) {
       <br />{request.previous_maturity_date} to {request.maturity_date}
     </> : <>{request.certificate_number}<br />{currency(request.amount)}</>}</td>
     <td>{request.notes || request.reason || "None"}{request.review_note && <p><strong>Officer:</strong> {request.review_note}</p>}</td>
-    <td><span className={`status-badge status-${request.status.toLowerCase()}`}>{request.status}</span></td>
-    <td>{view === "officer" && request.status === "Pending" ? <div className="request-decision">
+    <td><span className={`status-badge status-${request.status.toLowerCase().replace(/\s+/g, "-")}`}>{request.status}</span>
+      <ol className="audit-timeline" aria-label={`${request.kind} request ${request.id} audit timeline`}>
+        {(request.timeline || []).map((event) => <li key={event.id} className={`audit-${event.decision.toLowerCase().replace(/\s+/g, "-")}`}>
+          <span className="audit-marker">{event.decision === "Submitted" ? <Send size={12} /> : event.decision === "Under Review" ? <Clock size={12} /> : event.decision === "Approved" ? <Check size={12} /> : <X size={12} />}</span>
+          <strong>{event.decision}</strong><small><User size={12} aria-hidden="true" />{event.actor}</small>
+          <time dateTime={event.created_at.endsWith("Z") ? event.created_at : `${event.created_at.replace(" ", "T")}Z`}>{event.created_at.replace("T", " ").replace("Z", "")} UTC</time>
+          {event.remarks && <p>{event.remarks}</p>}
+        </li>)}
+      </ol>
+    </td>
+    <td>{view === "officer" && ["Pending", "Under Review"].includes(request.status) ? <div className="request-decision">
       <label>Decision note
         <textarea aria-label={`Decision note for ${type} request ${request.id}`} value={note} maxLength={2000}
           onChange={(event) => setNote(event.target.value)} disabled={busy} />
       </label>
       <div className="action-group">
-        <button disabled={busy} className="success-button" onClick={() => review("approve")}>Approve</button>
-        <button disabled={busy} className="danger-button" onClick={() => review("reject")}>Reject</button>
+        {request.status === "Pending" ? <button disabled={busy} onClick={() => review("start_review")}><ClipboardCheck size={16} aria-hidden="true" />Start Review</button> : <>
+          <button disabled={busy} className="success-button" onClick={() => review("approve")}><Check size={16} aria-hidden="true" />Approve</button>
+          <button disabled={busy} className="danger-button" onClick={() => review("reject")}><X size={16} aria-hidden="true" />Reject</button>
+        </>}
       </div>
     </div> : request.reviewed_at ? <small>{request.reviewed_at} UTC</small> : <span className="muted-text">Awaiting officer review</span>}</td>
   </tr>;

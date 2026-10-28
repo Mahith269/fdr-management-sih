@@ -19,6 +19,8 @@ class PortalTests(unittest.TestCase):
         cls.workspace = tempfile.TemporaryDirectory()
         os.environ["FDR_DB_PATH"] = str(Path(cls.workspace.name) / "startup.db")
         os.environ["FDR_UPLOAD_DIR"] = str(Path(cls.workspace.name) / "uploads")
+        os.environ["FDR_COLLEGE_PASSWORD"] = "Test-college-12345"
+        os.environ["FDR_OFFICER_PASSWORD"] = "Test-officer-12345"
         import main
         cls.api = main
         ready = threading.Event()
@@ -47,9 +49,18 @@ class PortalTests(unittest.TestCase):
     def setUp(self):
         self.api.DB_PATH = Path(self.workspace.name) / f"{self.id()}.db"
         self.api.initialize_database()
+        self.cookies = {}
+        for role in ("college", "officer"):
+            self.request("POST", "/auth/login", {"username": role, "password": f"Test-{role}-12345", "role": role}, role=role)
 
-    def request(self, method, path, data=None, expected=200, raw=None, content_type=None):
+    def request(self, method, path, data=None, expected=200, raw=None, content_type=None, role=None, origin=None):
         headers = {}
+        if role is None:
+            role = "officer" if path.endswith("/review") else "college"
+        if role in self.cookies and path != "/auth/login":
+            headers["Cookie"] = self.cookies[role]
+        if origin:
+            headers["Origin"] = origin
         body = raw
         if data is not None:
             body = json.dumps(data).encode()
@@ -62,9 +73,12 @@ class PortalTests(unittest.TestCase):
         except HTTPError as error:
             response = error
         with response:
+            self.response_headers = response.headers
+            if path == "/auth/login" and response.status == 200:
+                self.cookies[role] = response.headers["Set-Cookie"].split(";", 1)[0]
             payload = response.read()
             self.assertEqual(response.status, expected, payload[:1000])
-            if response.headers.get("Content-Type", "").startswith("application/json"):
+            if payload and response.headers.get("Content-Type", "").startswith("application/json"):
                 return json.loads(payload)
             return payload
 
@@ -87,6 +101,57 @@ class PortalTests(unittest.TestCase):
             "amount": 120000, "maturity_date": (date.today() + timedelta(days=365)).isoformat(),
             "notes": "Updated certificate",
         }
+
+    def test_login_role_permissions_and_logout(self):
+        cookie_header = self.response_headers["Set-Cookie"]
+        self.assertIn("HttpOnly", cookie_header)
+        self.assertIn("SameSite=lax", cookie_header)
+        self.assertIn("Max-Age=43200", cookie_header)
+        self.request("GET", "/fdrs", role="anonymous", origin="http://localhost:5173", expected=401)
+        self.assertEqual(self.response_headers["Access-Control-Allow-Origin"], "http://localhost:5173")
+        self.assertEqual(self.response_headers["Access-Control-Allow-Credentials"], "true")
+        self.request("GET", "/intelligence", role="anonymous", expected=401)
+        for path in ("/renewal-requests", "/release-requests", "/fdrs/1/documents", "/documents/1/download"):
+            self.request("GET", path, role="anonymous", expected=401)
+        self.request("POST", "/assistant/query", {"action": "attention"}, role="anonymous", expected=401)
+        self.request("POST", "/auth/login", {"username": "college", "password": "wrong", "role": "college"}, expected=401)
+        self.request("POST", "/auth/login", {"username": "college", "password": "Test-college-12345", "role": "officer"}, expected=401)
+        self.assertEqual(self.request("GET", "/auth/me", role="officer")["role"], "officer")
+        row, payload = self.register()
+        for path in (f"/fdrs/{row['id']}/review", "/renewal-requests/1/review", "/release-requests/1/review"):
+            self.request("POST", path, {"action": "approve"}, role="college", expected=403)
+        self.request("POST", "/fdrs", payload, role="officer", expected=403)
+        self.request("PUT", f"/fdrs/{row['id']}", payload, role="officer", expected=403)
+        self.request("POST", f"/fdrs/{row['id']}/submit", role="officer", expected=403)
+        for path in ("documents", "renewal-requests", "release-requests"):
+            self.request("POST", f"/fdrs/{row['id']}/{path}", role="officer", expected=403)
+        self.request("POST", "/auth/logout", role="college", expected=204)
+        self.request("GET", "/auth/me", role="college", expected=401)
+        self.request("GET", "/fdrs", role="college", expected=401)
+        self.request("POST", "/auth/logout", role="officer", origin="https://untrusted.example", expected=403)
+        with sqlite3.connect(self.api.DB_PATH) as connection:
+            connection.execute("UPDATE sessions SET expires_at=0")
+        connection.close()
+        self.request("GET", "/auth/me", role="officer", expected=401)
+
+    def test_password_hashes_session_storage_and_login_throttling(self):
+        with sqlite3.connect(self.api.DB_PATH) as connection:
+            users = connection.execute("SELECT username, password_hash, password_salt FROM users").fetchall()
+            tokens = [row[0] for row in connection.execute("SELECT token_hash FROM sessions")]
+        connection.close()
+        for username, password_hash, salt in users:
+            self.assertNotEqual(password_hash, f"Test-{username}-12345")
+            self.assertEqual(len(password_hash), 64)
+            self.assertEqual(len(salt), 32)
+        self.assertNotIn(self.cookies["college"].split("=", 1)[1], tokens)
+        for _attempt in range(10):
+            self.request("POST", "/auth/login", {"username": "missing", "password": "wrong", "role": "college"}, expected=401)
+        self.request("POST", "/auth/login", {"username": "college", "password": "Test-college-12345", "role": "college"}, expected=429)
+        with sqlite3.connect(self.api.DB_PATH) as connection:
+            connection.execute("UPDATE login_attempts SET window_started=0")
+        connection.close()
+        self.request("POST", "/auth/login", {"username": "college", "password": "Test-college-12345", "role": "college"}, role="college")
+        self.assertEqual(self.request("GET", "/auth/me")["role"], "college")
 
     def test_registration_correction_and_rejection(self):
         row, payload = self.register()
@@ -164,6 +229,7 @@ class PortalTests(unittest.TestCase):
         self.register("NEW-001")
         self.request("POST", f"/renewal-requests/{request['id']}/review", {"action": "approve"}, expected=409)
         self.assertEqual(self.request("GET", "/renewal-requests")[0]["status"], "Pending")
+        self.assertEqual(len(self.request("GET", "/renewal-requests")[0]["timeline"]), 1)
 
     def test_release_refund_and_alerts(self):
         draft, _ = self.register("DRAFT")
@@ -201,6 +267,113 @@ class PortalTests(unittest.TestCase):
         self.assertEqual(history["certificate_number"], "TEST-001")
         self.assertEqual(history["amount"], 100000)
 
+    def test_intelligence_boundaries_and_weighted_score(self):
+        self.assertEqual(self.request("GET", "/intelligence")["risk_score"], 0)
+        with sqlite3.connect(self.api.DB_PATH) as connection:
+            for index, days in enumerate((-1, 0, 7, 8, 30, 31, 90, 91)):
+                connection.execute("""INSERT INTO fdrs
+                    (institution_name, certificate_number, bank_name, amount, maturity_date, status)
+                    VALUES ('College', ?, 'Bank', 100, ?, 'Verified')""",
+                    (f"RISK-{index}", (date.today() + timedelta(days=days)).isoformat()))
+            for status in ("Draft", "Released", "Refunded", "Rejected"):
+                connection.execute("""INSERT INTO fdrs
+                    (institution_name, certificate_number, bank_name, amount, maturity_date, status)
+                    VALUES ('College', ?, 'Bank', 999999, ?, ?)""", (status, date.today().isoformat(), status))
+        result = self.request("GET", "/intelligence")
+        self.assertEqual(result["categories"], {"Critical": 3, "High": 2, "Upcoming": 2, "Safe": 1})
+        self.assertEqual([window["amount"] for window in result["windows"]], [200, 400, 600])
+        self.assertEqual(result["overdue_principal"], 100)
+        self.assertEqual(result["risk_score"], 60)
+        self.assertEqual(result["records"][0]["suggested_action"], "Initiate release")
+        self.assertEqual(result["records"][2]["suggested_action"], "Review renewal")
+        for days, expected_amount in ((7, 200), (30, 400), (90, 600)):
+            answer = self.request("POST", "/assistant/query", {"action": f"maturing_{days}"})
+            self.assertEqual(answer["amount"], expected_amount)
+        with sqlite3.connect(self.api.DB_PATH) as connection:
+            connection.execute("UPDATE fdrs SET amount=300 WHERE certificate_number='RISK-7'")
+        self.assertEqual(self.request("GET", "/intelligence")["risk_score"], 48)
+
+    def test_request_audit_stages_and_open_request_conflicts(self):
+        for request_type in ("renewal", "release"):
+            row, _ = self.register(f"AUDIT-{request_type}", verified=True)
+            data = self.renewal() if request_type == "renewal" else {"kind": "Release", "reason": "Obligations complete"}
+            request = self.request("POST", f"/fdrs/{row['id']}/{request_type}-requests",
+                                   {**data, "actor": "College registrar"}, expected=201)
+            path = f"/{request_type}-requests/{request['id']}/review"
+            self.request("POST", path, {"action": "start_review", "actor": "Officer Rao", "review_note": "Checking certificate"})
+            self.request("POST", path, {"action": "start_review"}, expected=409)
+            self.request("POST", f"/fdrs/{row['id']}/release-requests",
+                         {"kind": "Refund", "reason": "Conflicting request"}, expected=409)
+            self.request("POST", path, {"action": "reject"}, expected=400)
+            history = self.request("GET", f"/{request_type}-requests")[0]
+            self.assertEqual(history["status"], "Under Review")
+            self.assertEqual(len(history["timeline"]), 2)
+            self.request("POST", path, {"action": "reject", "actor": "Officer Rao", "review_note": "Missing evidence"})
+            events = self.request("GET", f"/{request_type}-requests")[0]["timeline"]
+            self.assertEqual([event["decision"] for event in events], ["Submitted", "Under Review", "Rejected"])
+            self.assertEqual(events[0]["actor"], "College User (college)")
+            self.assertEqual(events[-1]["actor"], "Review Officer (officer)")
+            self.assertEqual(events[-1]["remarks"], "Missing evidence")
+            self.assertTrue(all(event["created_at"] for event in events))
+            self.api.initialize_database()
+            self.assertEqual(len(self.request("GET", f"/{request_type}-requests")[0]["timeline"]), 3)
+
+    def test_legacy_request_events_backfill_without_inventing_review(self):
+        row, _ = self.register(verified=True)
+        request = self.request("POST", f"/fdrs/{row['id']}/release-requests",
+                               {"kind": "Refund", "reason": "Legacy submission"}, expected=201)
+        self.request("POST", f"/release-requests/{request['id']}/review",
+                     {"action": "reject", "review_note": "Legacy decision"})
+        with sqlite3.connect(self.api.DB_PATH) as connection:
+            connection.execute("DELETE FROM request_events")
+        self.api.initialize_database()
+        self.api.initialize_database()
+        history = self.request("GET", "/release-requests")[0]
+        self.assertEqual([event["decision"] for event in history["timeline"]], ["Submitted", "Rejected"])
+        self.assertEqual(history["timeline"][0]["created_at"], history["created_at"])
+        self.assertEqual(history["timeline"][1]["created_at"], history["reviewed_at"])
+        self.assertTrue(all(event["actor"] == "Legacy actor unknown" for event in history["timeline"]))
+
+    def test_assistant_bank_grouping_and_ties(self):
+        for certificate, bank in (("BANK-A", "Metro Bank"), ("BANK-B", " metro bank "), ("BANK-C", "Other Bank")):
+            row, _ = self.register(certificate, verified=True)
+            with sqlite3.connect(self.api.DB_PATH) as connection:
+                connection.execute("UPDATE fdrs SET bank_name=?, amount=? WHERE id=?",
+                                   (bank, 200000 if bank == "Other Bank" else 100000, row["id"]))
+        answer = self.request("POST", "/assistant/query", {"action": "top_bank"})
+        self.assertEqual(answer["amount"], 400000)
+        self.assertEqual(answer["count"], 3)
+        self.assertIn("tied", answer["answer"])
+        with sqlite3.connect(self.api.DB_PATH) as connection:
+            connection.execute("UPDATE fdrs SET amount=300000 WHERE certificate_number='BANK-A'")
+        answer = self.request("POST", "/assistant/query", {"action": "top_bank"})
+        self.assertEqual(answer["amount"], 400000)
+        self.assertEqual(answer["count"], 2)
+        self.assertNotIn("tied", answer["answer"])
+
+    def test_assistant_queries_use_database(self):
+        self.assertEqual(self.request("POST", "/assistant/query", {"action": "top_bank"})["count"], 0)
+        row, _ = self.register(verified=True)
+        for question in ("How much money matures in the next 30 days?", "Which FDRs need immediate attention?",
+                         "Which bank holds the highest principal amount?"):
+            answer = self.request("POST", "/assistant/query", {"question": question})
+            self.assertTrue(answer["supported"])
+            self.assertEqual(answer["amount"], 100000)
+            self.assertEqual(answer["count"], 1)
+            self.assertEqual(answer["records"][0]["id"], row["id"])
+        release = self.request("POST", f"/fdrs/{row['id']}/release-requests",
+                               {"kind": "Release", "reason": "Obligations complete"}, expected=201)
+        self.request("POST", f"/release-requests/{release['id']}/review", {"action": "start_review"})
+        answer = self.request("POST", "/assistant/query", {"question": "Show all pending release requests."})
+        self.assertEqual(answer["count"], 1)
+        self.assertEqual(answer["records"][0]["status"], "Under Review")
+        self.request("POST", f"/release-requests/{release['id']}/review", {"action": "approve"})
+        for action in ("attention", "pending_releases", "maturing_30", "top_bank"):
+            self.assertEqual(self.request("POST", "/assistant/query", {"action": action})["amount"], 0)
+        answer = self.request("POST", "/assistant/query", {"question": "Delete my records"})
+        self.assertFalse(answer["supported"])
+        self.assertIsNone(answer["amount"])
+
     def test_additive_migration_preserves_existing_record(self):
         legacy = Path(self.workspace.name) / "legacy.db"
         with sqlite3.connect(legacy) as connection:
@@ -212,6 +385,7 @@ class PortalTests(unittest.TestCase):
         self.api.DB_PATH = legacy
         self.api.initialize_database()
         self.api.initialize_database()
+        self.request("POST", "/auth/login", {"username": "college", "password": "Test-college-12345", "role": "college"}, role="college")
         records = self.request("GET", "/fdrs")
         self.assertEqual(records[0]["id"], 42)
         self.assertEqual(records[0]["certificate_number"], "OLD")

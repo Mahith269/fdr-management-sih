@@ -1,15 +1,18 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import axios from "axios";
+import { GraduationCap, LogOut, ShieldCheck } from "lucide-react";
+import Auth from "./Auth";
 import FdrDetails, { API_URL, RequestHistory, errorMessage } from "./FdrDetails";
+import PortfolioIntelligence from "./PortfolioIntelligence";
 import "./App.css";
 
-function App() {
+function Dashboard({ user, onLogout, signingOut }) {
   const [fdrs, setFdrs] = useState([]);
-  const [alerts, setAlerts] = useState([]);
+  const [intelligence, setIntelligence] = useState(null);
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState("college");
+  const view = user.role;
   const [renewals, setRenewals] = useState([]);
   const [releases, setReleases] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
@@ -36,13 +39,13 @@ function App() {
 
       const [fdrResponse, alertResponse, renewalResponse, releaseResponse] = await Promise.all([
         axios.get(`${API_URL}/fdrs`),
-        axios.get(`${API_URL}/fdrs/alerts`),
+        axios.get(`${API_URL}/intelligence`),
         axios.get(`${API_URL}/renewal-requests`),
         axios.get(`${API_URL}/release-requests`),
       ]);
 
       setFdrs(fdrResponse.data);
-      setAlerts(alertResponse.data.alerts || []);
+      setIntelligence(alertResponse.data);
       setRenewals(renewalResponse.data);
       setReleases(releaseResponse.data);
       return true;
@@ -145,7 +148,7 @@ function App() {
         );
       }
 
-      return <span className="muted-text">No action available</span>;
+      return null;
     }
 
     if (fdr.status === "Submitted") {
@@ -166,7 +169,7 @@ function App() {
       );
     }
 
-    return <span className="muted-text">No action available</span>;
+    return null;
   }
 
   // Dashboard summary counts
@@ -216,24 +219,7 @@ function App() {
       : fdrs).filter((fdr) => (statusFilter === "All" || fdr.status === statusFilter) &&
         [fdr.institution_name, fdr.certificate_number, fdr.bank_name].some((value) => value.toLowerCase().includes(search.toLowerCase().trim())));
       const selectedFdr = fdrs.find((fdr) => fdr.id === selectedId);
-      const pendingRequest = [...renewals, ...releases].some((request) => request.fdr_id === selectedId && request.status === "Pending");
-
-  // Display the maturity alert
-  function renderMaturityAlert(alert) {
-    if (alert.alert_type === "Matured") {
-      return (
-        <span className="alert-matured">
-          Matured {Math.abs(alert.days_remaining)} day(s) ago
-        </span>
-      );
-    }
-
-    return (
-      <span className="alert-upcoming">
-        Matures in {alert.days_remaining} day(s)
-      </span>
-    );
-  }
+      const pendingRequest = [...renewals, ...releases].some((request) => request.fdr_id === selectedId && ["Pending", "Under Review"].includes(request.status));
 
   return (
     <div className="app-container">
@@ -245,6 +231,7 @@ function App() {
           </p>
         </div>
 
+        <div className="account-actions"><span className="signed-in-user">{user.display_name}<small>{user.username}</small></span>
         <button
           className="refresh-button"
           onClick={loadFdrs}
@@ -252,6 +239,7 @@ function App() {
         >
           {loading ? "Loading..." : "Refresh Data"}
         </button>
+        <button className="secondary-button logout-button" disabled={busy || signingOut} onClick={onLogout}><LogOut size={17} aria-hidden="true" />{signingOut ? "Signing out..." : "Sign Out"}</button></div>
       </header>
 
       {message && (
@@ -260,24 +248,7 @@ function App() {
         </div>
       )}
 
-      {/* Dashboard navigation */}
-      <nav className="dashboard-tabs">
-        <button
-          className={view === "college" ? "tab active-tab" : "tab"}
-          aria-pressed={view === "college"}
-          onClick={() => { setView("college"); setStatusFilter("All"); }}
-        >
-          College Dashboard
-        </button>
-
-        <button
-          className={view === "officer" ? "tab active-tab" : "tab"}
-          aria-pressed={view === "officer"}
-          onClick={() => { setView("officer"); setStatusFilter("All"); }}
-        >
-          Officer Dashboard
-        </button>
-      </nav>
+      <div className="role-dashboard-heading"><h2>{view === "college" ? <GraduationCap size={22} aria-hidden="true" /> : <ShieldCheck size={22} aria-hidden="true" />}{view === "college" ? "College Dashboard" : "Officer Dashboard"}</h2></div>
 
       {/* Summary statistics */}
       <section className="stats-grid">
@@ -292,57 +263,7 @@ function App() {
         ))}
       </section>
 
-      {/* NEW: FDR maturity alerts */}
-      <section className="panel maturity-panel">
-        <div className="panel-heading">
-          <div>
-            <h2>FDR Maturity Alerts</h2>
-            <p>
-              Verified FDRs that have matured or are due within
-              the next 30 days.
-            </p>
-          </div>
-
-          <span className="alert-count">
-            {alerts.length} alert{alerts.length === 1 ? "" : "s"}
-          </span>
-        </div>
-
-        {loading ? (
-          <p>Loading maturity alerts...</p>
-        ) : alerts.length === 0 ? (
-          <div className="empty-state">
-            <h3>No maturity alerts</h3>
-            <p>
-              No verified FDRs are currently due for attention.
-            </p>
-          </div>
-        ) : (
-          <div className="table-wrapper">
-            <table>
-              <thead>
-                <tr>
-                  <th>Certificate Number</th>
-                  <th>Institution</th>
-                  <th>Maturity Date</th>
-                  <th>Alert</th>
-                </tr>
-              </thead>
-
-              <tbody>
-                {alerts.map((alert) => (
-                  <tr key={alert.id}>
-                    <td>{alert.certificate_number}</td>
-                    <td>{alert.institution_name}</td>
-                    <td>{alert.maturity_date}</td>
-                    <td>{renderMaturityAlert(alert)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+      <PortfolioIntelligence data={intelligence} loading={loading} onSelect={selectFdr} />
 
       {/* College registration form */}
       {view === "college" && (
@@ -528,7 +449,7 @@ function App() {
         )}
       </section>
 
-      <div ref={details}>{selectedFdr && <FdrDetails key={selectedFdr.id} fdr={selectedFdr} view={view}
+      <div id="fdr-details" ref={details}>{selectedFdr && <FdrDetails key={selectedFdr.id} fdr={selectedFdr} view={view}
         pending={pendingRequest} busy={busy || loading} perform={perform} onClose={() => setSelectedId(null)} />}</div>
       <RequestHistory title="Renewal / Replacement Requests" type="renewal" requests={renewals} view={view}
         busy={busy || loading} perform={perform} onSelect={selectFdr} />
@@ -537,15 +458,16 @@ function App() {
 
       <footer className="app-footer">
         <p>
-          FDR Management Portal · Hackathon Prototype
+          FDR Management Portal
         </p>
         <p>
-          Demo dashboard only. Authentication and role-based
-          access must be implemented before production use.
+          Demonstration environment | Shared portfolio
         </p>
       </footer>
     </div>
   );
 }
 
-export default App;
+export default function App() {
+  return <Auth>{(user, onLogout, signingOut) => <Dashboard key={user.id} user={user} onLogout={onLogout} signingOut={signingOut} />}</Auth>;
+}
