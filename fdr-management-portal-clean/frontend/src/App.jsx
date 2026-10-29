@@ -6,6 +6,7 @@ import Auth from "./Auth";
 import FdrDetails, { API_URL, RequestHistory, errorMessage } from "./FdrDetails";
 import PortfolioIntelligence from "./PortfolioIntelligence";
 import "./App.css";
+import "./premium.css";
 
 function Dashboard({ user, onLogout, signingOut }) {
   const [fdrs, setFdrs] = useState([]);
